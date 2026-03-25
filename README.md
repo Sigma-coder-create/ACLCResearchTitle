@@ -29,9 +29,10 @@ The installer (created with jpackage) uses the following exit codes:
 | Scenario | Exit Code |
 |----------|-----------|
 | Installation successful | 0 |
-| User cancelled installation | 1602 |
-| Another installation already in progress | 1618 |
-| Disk space full | 112 |
+| Installation cancelled by user | 1602 |
+| Installation already in progress | 1618 |
+| Disk space is full| 112 |
 | Reboot required | 3010 |
-| Fatal error | 1603 |
-| (Re‑installation of same version) | 0 |
+| Network failure | 0x80072EE2 |
+| Package rejected during installation | 1603 |
+| Miscellaneous install failure scenarios | 1605 |
