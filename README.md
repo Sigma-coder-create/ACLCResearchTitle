@@ -21,3 +21,17 @@ A Java desktop application that prevents duplicate research titles using:
 ### Build the executable JAR
 ```bash
 mvn clean package
+
+# Installer Exit Codes
+
+The installer (created with jpackage) uses the following exit codes:
+
+| Scenario | Exit Code |
+|----------|-----------|
+| Installation successful | 0 |
+| User cancelled installation | 1602 |
+| Another installation already in progress | 1618 |
+| Disk space full | 112 |
+| Reboot required | 3010 |
+| Fatal error | 1603 |
+| (Re‑installation of same version) | 0 |
