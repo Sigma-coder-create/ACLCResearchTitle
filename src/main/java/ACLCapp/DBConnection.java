@@ -79,15 +79,19 @@ public class DBConnection {
         try {
             if (sqliteConnection == null || sqliteConnection.isClosed()) {
                 Class.forName("org.sqlite.JDBC");
-                String dbFile = props.getProperty("sqlite.file"); // just the filename, e.g., "aclcsqlitedb.db"
-                // Build absolute path from current working directory and convert backslashes to forward slashes
-                String url = "jdbc:sqlite:" +
-                    java.nio.file.Paths.get(System.getProperty("user.dir"))
-                        .resolve(dbFile)
-                        .toAbsolutePath()
-                        .toString()
-                        .replace('\\', '/');
-                // (Optional debug line – you can keep it or remove it)
+                String dbFile = props.getProperty("sqlite.file"); // e.g., "aclcsqlitedb.db"
+
+            // Use LOCALAPPDATA for writable storage (per‑user, not synced)
+                String localAppData = System.getenv("LOCALAPPDATA");
+                if (localAppData == null) localAppData = System.getProperty("user.home"); // fallback
+                String appFolder = localAppData + java.io.File.separator + "ACLC Research Title";
+                java.io.File folder = new java.io.File(appFolder);
+                if (!folder.exists()) {
+                folder.mkdirs(); // create folder if it doesn't exist
+                }
+                String dbPath = appFolder + java.io.File.separator + dbFile;
+                String url = "jdbc:sqlite:" + dbPath;
+
                 System.out.println("[SQLite] Opening DB at: " + url);
                 sqliteConnection = DriverManager.getConnection(url);
                 System.out.println("[SQLite] Connected to SQLite database.");
@@ -97,11 +101,5 @@ public class DBConnection {
             sqliteConnection = null;
         }
         return sqliteConnection;
-    }
-
-    public static void closeConnections() {
-        try { if (mysqlConnection != null && !mysqlConnection.isClosed()) mysqlConnection.close(); } catch (Exception ignored) {}
-        try { if (sqliteConnection != null && !sqliteConnection.isClosed()) sqliteConnection.close(); } catch (Exception ignored) {}
-        System.out.println("[DB] Connections closed.");
     }
 }
