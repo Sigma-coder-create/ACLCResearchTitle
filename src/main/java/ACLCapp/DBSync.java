@@ -5,221 +5,289 @@ import java.util.*;
 
 public class DBSync {
 
-    public static void syncAllTables() {
-        Connection mysql = DBConnection.getMySQLConnection();
-        Connection sqlite = DBConnection.getSQLiteConnection();
-
-        if (sqlite == null) {
-            System.err.println("[Sync] SQLite connection failed - aborting sync.");
-            return;
-        }
-        if (mysql == null) {
-            System.err.println("[Sync] MySQL connection failed - skipping MySQL -> SQLite sync.");
-            return;
-        }
-
-        try {
-            // Get all tables from MySQL (excluding system tables)
-            List<String> tables = getTablesFromMySQL(mysql);
-            
-            System.out.println("[Sync] Found tables in MySQL: " + tables);
-            
-            // Sync each table
-            for (String tableName : tables) {
-                syncTable(mysql, sqlite, tableName);
-            }
-            
-            System.out.println("[Sync] All tables synced successfully!");
-            
-        } catch (Exception e) {
-            System.err.println("[Sync] Error syncing: " + e.getMessage());
-            e.printStackTrace();
-        } finally {
-            try { if (mysql != null) mysql.close(); } catch (Exception ignored) {}
-            try { if (sqlite != null) sqlite.close(); } catch (Exception ignored) {}
-        }
-    }
-    
-    private static List<String> getTablesFromMySQL(Connection mysql) throws SQLException {
-        List<String> tables = new ArrayList<>();
-        DatabaseMetaData meta = mysql.getMetaData();
-        ResultSet rs = meta.getTables(null, null, "%", new String[]{"TABLE"});
-        
-        while (rs.next()) {
-            String tableName = rs.getString("TABLE_NAME");
-            // Skip system tables if any
-            if (!tableName.startsWith("sys_") && !tableName.equals("information_schema")) {
-                tables.add(tableName);
-            }
-        }
-        rs.close();
-        return tables;
-    }
-    
-    private static void syncTable(Connection mysql, Connection sqlite, String tableName) throws SQLException {
-        System.out.println("[Sync] Syncing table: " + tableName);
-        
-        // Step 1: Create table in SQLite if it doesn't exist (with proper schema)
-        createTableInSQLite(mysql, sqlite, tableName);
-        
-        // Step 2: Sync MySQL -> SQLite
-        syncMySQLtoSQLite(mysql, sqlite, tableName);
-        
-        // Step 3: Sync SQLite -> MySQL
-        syncSQLiteToMySQL(mysql, sqlite, tableName);
-    }
-    
-    private static void createTableInSQLite(Connection mysql, Connection sqlite, String tableName) throws SQLException {
-        // Get table structure from MySQL
-        DatabaseMetaData meta = mysql.getMetaData();
-        ResultSet columns = meta.getColumns(null, null, tableName, "%");
-        
-        StringBuilder createSQL = new StringBuilder("CREATE TABLE IF NOT EXISTS \"" + tableName + "\" (");
-        boolean first = true;
-        String primaryKey = null;
-        
-        while (columns.next()) {
-            if (!first) {
-                createSQL.append(", ");
-            }
-            String columnName = columns.getString("COLUMN_NAME");
-            String type = columns.getString("TYPE_NAME");
-            
-            // Map MySQL types to SQLite types
-            String sqliteType = mapMySQLTypeToSQLite(type);
-            
-            createSQL.append("\"").append(columnName).append("\" ").append(sqliteType);
-            
-            // Check if this column is primary key
-            ResultSet pk = meta.getPrimaryKeys(null, null, tableName);
-            while (pk.next()) {
-                if (columnName.equals(pk.getString("COLUMN_NAME"))) {
-                    createSQL.append(" PRIMARY KEY");
-                    break;
-                }
-            }
-            pk.close();
-            
-            first = false;
-        }
-        createSQL.append(")");
-        
-        try (Statement stmt = sqlite.createStatement()) {
-            stmt.execute(createSQL.toString());
-            System.out.println("[SQLite] Table '" + tableName + "' ensured.");
-        }
-        columns.close();
-    }
-    
-    private static void syncMySQLtoSQLite(Connection mysql, Connection sqlite, String tableName) throws SQLException {
-        // Get column names
-        List<String> columns = getColumnNames(mysql, tableName);
-        
-        // Build SELECT query for MySQL
-        String selectSQL = "SELECT * FROM " + tableName;
-        
-        // Build INSERT/REPLACE query for SQLite
-        StringBuilder insertSQL = new StringBuilder("INSERT OR REPLACE INTO \"" + tableName + "\" (");
-        StringBuilder placeholders = new StringBuilder();
-        
-        for (int i = 0; i < columns.size(); i++) {
-            if (i > 0) {
-                insertSQL.append(", ");
-                placeholders.append(", ");
-            }
-            insertSQL.append("\"").append(columns.get(i)).append("\"");
-            placeholders.append("?");
-        }
-        insertSQL.append(") VALUES (").append(placeholders).append(")");
-        
-        try (Statement mysqlStmt = mysql.createStatement();
-             ResultSet rs = mysqlStmt.executeQuery(selectSQL);
-             PreparedStatement sqliteInsert = sqlite.prepareStatement(insertSQL.toString())) {
-            
-            int rowCount = 0;
-            while (rs.next()) {
-                for (int i = 0; i < columns.size(); i++) {
-                    sqliteInsert.setObject(i + 1, rs.getObject(columns.get(i)));
-                }
-                sqliteInsert.executeUpdate();
-                rowCount++;
-            }
-            System.out.println("[Sync] " + rowCount + " rows synced from MySQL -> SQLite for table: " + tableName);
-        }
-    }
-    
-    private static void syncSQLiteToMySQL(Connection mysql, Connection sqlite, String tableName) throws SQLException {
-        List<String> columns = getColumnNames(mysql, tableName);
-        
-        // Build SELECT query for SQLite
-        String selectSQL = "SELECT * FROM \"" + tableName + "\"";
-        
-        // Build INSERT/UPDATE query for MySQL
-        StringBuilder insertSQL = new StringBuilder("INSERT INTO " + tableName + " (");
-        StringBuilder updateSQL = new StringBuilder(" ON DUPLICATE KEY UPDATE ");
-        
-        for (int i = 0; i < columns.size(); i++) {
-            if (i > 0) {
-                insertSQL.append(", ");
-                updateSQL.append(", ");
-            }
-            String column = columns.get(i);
-            insertSQL.append("`").append(column).append("`");
-            updateSQL.append("`").append(column).append("`=VALUES(`").append(column).append("`)");
-        }
-        insertSQL.append(") VALUES (");
-        
-        for (int i = 0; i < columns.size(); i++) {
-            if (i > 0) insertSQL.append(", ");
-            insertSQL.append("?");
-        }
-        insertSQL.append(")").append(updateSQL);
-        
-        try (Statement sqliteStmt = sqlite.createStatement();
-             ResultSet rs = sqliteStmt.executeQuery(selectSQL);
-             PreparedStatement mysqlInsert = mysql.prepareStatement(insertSQL.toString())) {
-            
-            int rowCount = 0;
-            while (rs.next()) {
-                for (int i = 0; i < columns.size(); i++) {
-                    mysqlInsert.setObject(i + 1, rs.getObject(columns.get(i)));
-                }
-                mysqlInsert.executeUpdate();
-                rowCount++;
-            }
-            System.out.println("[Sync] " + rowCount + " rows synced from SQLite -> MySQL for table: " + tableName);
-        }
-    }
-    
-    private static List<String> getColumnNames(Connection mysql, String tableName) throws SQLException {
-        List<String> columns = new ArrayList<>();
-        DatabaseMetaData meta = mysql.getMetaData();
-        ResultSet rs = meta.getColumns(null, null, tableName, "%");
-        
-        while (rs.next()) {
-            columns.add(rs.getString("COLUMN_NAME"));
-        }
-        rs.close();
-        return columns;
-    }
-    
-    private static String mapMySQLTypeToSQLite(String mysqlType) {
-        mysqlType = mysqlType.toUpperCase();
-        if (mysqlType.contains("INT")) return "INTEGER";
-        if (mysqlType.contains("CHAR") || mysqlType.contains("TEXT") || mysqlType.contains("VARCHAR")) return "TEXT";
-        if (mysqlType.contains("DOUBLE") || mysqlType.contains("FLOAT") || mysqlType.contains("DECIMAL")) return "REAL";
-        if (mysqlType.contains("DATE") || mysqlType.contains("TIME")) return "TEXT";
-        if (mysqlType.contains("BLOB")) return "BLOB";
-        return "TEXT"; // default
-    }
-    
-    // Keep your original method for backward compatibility if needed
     public static void syncResearchTitles() {
-        syncAllTables();
+        syncTwoWay();
     }
     
     public static void insertTestDataIfEmpty() {
-        // This method is no longer needed since we're syncing actual data
-        System.out.println("[TestData] Test data insertion disabled - using actual MySQL data");
+        System.out.println("[DBSync] Test data check - using actual database sync.");
+    }
+
+    public static void syncTwoWay() {
+        Connection mysql = null;
+        Connection sqlite = null;
+        
+        try {
+            mysql = DBConnection.getMySQLConnection();
+            sqlite = DBConnection.getSQLiteConnection();
+
+            if (sqlite == null) {
+                System.err.println("[Sync] SQLite unavailable - cannot sync.");
+                return;
+            }
+
+            System.out.println("[Sync] Starting two-way synchronization...");
+            
+            // CRITICAL: Ensure SQLite has the proper schema with last_updated column
+            ensureSQLiteSchema(sqlite);
+            sqlite.createStatement().execute("PRAGMA schema_version;");
+            
+            if (mysql != null) {
+                // Check if MySQL has last_updated column
+                if (!hasLastUpdatedColumn(mysql)) {
+                    System.err.println("[Sync] ⚠️ MySQL missing 'last_updated' column. Please add it:");
+                    System.err.println("[Sync] ALTER TABLE ACLC_research_titles ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;");
+                    basicSyncMySQLtoSQLite(mysql, sqlite);
+                } else {
+                    // Both databases have last_updated - do full two-way sync
+                    syncFromMySQLToSQLite(mysql, sqlite);
+                    syncFromSQLiteToMySQL(sqlite, mysql);
+                }
+                System.out.println("[Sync] ✅ Two-way sync completed successfully.");
+            } else {
+                System.out.println("[Sync] ⚠️ MySQL unavailable - working offline with SQLite only.");
+            }
+
+        } catch (Exception e) {
+            System.err.println("[Sync] ❌ Error during synchronization: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private static void ensureSQLiteSchema(Connection sqlite) throws SQLException {
+
+        boolean tableExists = false;
+
+        try (Statement stmt = sqlite.createStatement();
+             ResultSet rs = stmt.executeQuery(
+                 "SELECT name FROM sqlite_master WHERE type='table' AND name='ACLC_research_titles'"
+             )) {
+            tableExists = rs.next();
+        }
+
+        if (!tableExists) {
+            String createSQL =
+                "CREATE TABLE IF NOT EXISTS ACLC_research_titles (" +
+                "ID INTEGER PRIMARY KEY AUTOINCREMENT," +
+                "\"Research Title\" TEXT NOT NULL," +
+                "\"SY-YR\" TEXT," +
+                "\"Status\" TEXT," +
+                "\"Applied\" TEXT," +
+                "\"Strand\" TEXT," +
+                "\"Software\" TEXT," +
+                "\"Webpage\" TEXT," +
+                "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
+                ")";
+
+            try (Statement stmt = sqlite.createStatement()) {
+                stmt.execute(createSQL);
+                System.out.println("[Sync] SQLite table created.");
+            }
+
+            return;
+        }
+
+        boolean hasLastUpdated = false;
+
+        try (Statement stmt = sqlite.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(ACLC_research_titles)")) {
+
+            while (rs.next()) {
+                if ("last_updated".equalsIgnoreCase(rs.getString("name"))) {
+                    hasLastUpdated = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasLastUpdated) {
+            try (Statement stmt = sqlite.createStatement()) {
+                stmt.execute("ALTER TABLE ACLC_research_titles ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+                System.out.println("[Sync] Added last_updated column.");
+            }
+        } else {
+            System.out.println("[Sync] last_updated column already exists.");
+        }
+    }
+    private static boolean hasLastUpdatedColumn(Connection mysql) {
+        try {
+            DatabaseMetaData meta = mysql.getMetaData();
+            try (ResultSet rs = meta.getColumns(null, null, "ACLC_research_titles", "last_updated")) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    private static void basicSyncMySQLtoSQLite(Connection mysql, Connection sqlite) throws SQLException {
+        String selectSQL = "SELECT ID, \"Research Title\", \"SY-YR\", Status, Applied, Strand, Software, Webpage FROM ACLC_research_titles";
+        
+        // Clear SQLite table first for basic sync
+        try (Statement stmt = sqlite.createStatement()) {
+            stmt.execute("DELETE FROM ACLC_research_titles");
+        }
+        
+        int count = 0;
+        try (Statement stmt = mysql.createStatement();
+             ResultSet rs = stmt.executeQuery(selectSQL)) {
+            
+            String insertSQL = "INSERT INTO ACLC_research_titles " +
+                "(ID, \"Research Title\", \"SY-YR\", Status, Applied, Strand, Software, Webpage, last_updated) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            
+            try (PreparedStatement ps = sqlite.prepareStatement(insertSQL)) {
+                while (rs.next()) {
+                    ps.setInt(1, rs.getInt("ID"));
+                    ps.setString(2, rs.getString("Research Title"));
+                    ps.setString(3, rs.getString("SY-YR"));
+                    ps.setString(4, rs.getString("Status"));
+                    ps.setString(5, rs.getString("Applied"));
+                    ps.setString(6, rs.getString("Strand"));
+                    ps.setString(7, rs.getString("Software"));
+                    ps.setString(8, rs.getString("Webpage"));
+                    ps.setTimestamp(9, new Timestamp(System.currentTimeMillis()));
+                    ps.executeUpdate();
+                    count++;
+                }
+            }
+        }
+        System.out.println("[Sync] Basic sync: " + count + " records copied from MySQL to SQLite");
+    }
+
+    private static void syncFromMySQLToSQLite(Connection mysql, Connection sqlite) throws SQLException {
+        String selectSQL = "SELECT ID, \"Research Title\", \"SY-YR\", Status, Applied, Strand, " +
+                          "Software, Webpage, last_updated FROM ACLC_research_titles";
+        
+        int inserted = 0, updated = 0;
+        
+        try (Statement stmt = mysql.createStatement();
+             ResultSet rs = stmt.executeQuery(selectSQL)) {
+            
+            while (rs.next()) {
+                int id = rs.getInt("ID");
+                Timestamp mysqlTimestamp = rs.getTimestamp("last_updated");
+                Timestamp sqliteTimestamp = getSQLiteTimestamp(sqlite, id);
+                
+                if (sqliteTimestamp == null) {
+                    insertOrReplaceSQLite(sqlite, rs);
+                    inserted++;
+                } else if (mysqlTimestamp != null && mysqlTimestamp.after(sqliteTimestamp)) {
+                    insertOrReplaceSQLite(sqlite, rs);
+                    updated++;
+                }
+            }
+        }
+        
+        System.out.println("[Sync] MySQL → SQLite: " + inserted + " inserted, " + updated + " updated");
+    }
+
+    private static void syncFromSQLiteToMySQL(Connection sqlite, Connection mysql) throws SQLException {
+        String selectSQL = "SELECT ID, \"Research Title\", \"SY-YR\", Status, Applied, Strand, " +
+                          "Software, Webpage, last_updated FROM ACLC_research_titles";
+        
+        int inserted = 0, updated = 0;
+        
+        try (Statement stmt = sqlite.createStatement();
+             ResultSet rs = stmt.executeQuery(selectSQL)) {
+            
+            while (rs.next()) {
+                int id = rs.getInt("ID");
+                Timestamp sqliteTimestamp = rs.getTimestamp("last_updated");
+                Timestamp mysqlTimestamp = getMySQLTimestamp(mysql, id);
+                
+                if (mysqlTimestamp == null) {
+                    insertOrReplaceMySQL(mysql, rs);
+                    inserted++;
+                } else if (sqliteTimestamp != null && sqliteTimestamp.after(mysqlTimestamp)) {
+                    insertOrReplaceMySQL(mysql, rs);
+                    updated++;
+                }
+            }
+        }
+        
+        System.out.println("[Sync] SQLite → MySQL: " + inserted + " inserted, " + updated + " updated");
+    }
+
+    private static Timestamp getSQLiteTimestamp(Connection sqlite, int id) {
+        try {
+            String sql = "SELECT last_updated FROM ACLC_research_titles WHERE ID = ?";
+            try (PreparedStatement ps = sqlite.prepareStatement(sql)) {
+                ps.setInt(1, id);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? rs.getTimestamp("last_updated") : null;
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("[Sync] Warning: last_updated column not ready yet.");
+            return null;
+        }
+    }
+
+    private static Timestamp getMySQLTimestamp(Connection mysql, int id) throws SQLException {
+        String sql = "SELECT last_updated FROM ACLC_research_titles WHERE ID = ?";
+        try (PreparedStatement ps = mysql.prepareStatement(sql)) {
+            ps.setInt(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getTimestamp("last_updated") : null;
+            }
+        }
+    }
+
+    private static void insertOrReplaceSQLite(Connection sqlite, ResultSet rs) throws SQLException {
+        String sql = "INSERT OR REPLACE INTO ACLC_research_titles " +
+                    "(ID, \"Research Title\", \"SY-YR\", Status, Applied, Strand, Software, Webpage, last_updated) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        
+        try (PreparedStatement ps = sqlite.prepareStatement(sql)) {
+            ps.setInt(1, rs.getInt("ID"));
+            ps.setString(2, rs.getString("Research Title"));
+            ps.setString(3, rs.getString("SY-YR"));
+            ps.setString(4, rs.getString("Status"));
+            ps.setString(5, rs.getString("Applied"));
+            ps.setString(6, rs.getString("Strand"));
+            ps.setString(7, rs.getString("Software"));
+            ps.setString(8, rs.getString("Webpage"));
+            
+            Timestamp ts = rs.getTimestamp("last_updated");
+            if (ts == null) {
+                ts = new Timestamp(System.currentTimeMillis());
+            }
+            ps.setTimestamp(9, ts);
+            ps.executeUpdate();
+        }
+    }
+
+    private static void insertOrReplaceMySQL(Connection mysql, ResultSet rs) throws SQLException {
+        String sql = "INSERT INTO ACLC_research_titles " +
+                    "(ID, \"Research Title\", \"SY-YR\", Status, Applied, Strand, Software, Webpage, last_updated) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                    "ON DUPLICATE KEY UPDATE " +
+                    "\"Research Title\" = VALUES(\"Research Title\"), " +
+                    "\"SY-YR\" = VALUES(\"SY-YR\"), " +
+                    "Status = VALUES(Status), " +
+                    "Applied = VALUES(Applied), " +
+                    "Strand = VALUES(Strand), " +
+                    "Software = VALUES(Software), " +
+                    "Webpage = VALUES(Webpage), " +
+                    "last_updated = VALUES(last_updated)";
+        
+        try (PreparedStatement ps = mysql.prepareStatement(sql)) {
+            ps.setInt(1, rs.getInt("ID"));
+            ps.setString(2, rs.getString("Research Title"));
+            ps.setString(3, rs.getString("SY-YR"));
+            ps.setString(4, rs.getString("Status"));
+            ps.setString(5, rs.getString("Applied"));
+            ps.setString(6, rs.getString("Strand"));
+            ps.setString(7, rs.getString("Software"));
+            ps.setString(8, rs.getString("Webpage"));
+            
+            Timestamp ts = rs.getTimestamp("last_updated");
+            if (ts == null) {
+                ts = new Timestamp(System.currentTimeMillis());
+            }
+            ps.setTimestamp(9, ts);
+            ps.executeUpdate();
+        }
     }
 }

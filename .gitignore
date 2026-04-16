@@ -1,1 +1,20 @@
-installer/ 
+# Maven build folder
+/target/
+
+# Compiled Java files
+*.class
+
+# Logs
+*.log
+
+# SQLite / local databases
+*.db
+*.sqlite
+
+# NetBeans
+/nbproject/private/
+/build/
+
+# OS files
+.DS_Store
+Thumbs.db

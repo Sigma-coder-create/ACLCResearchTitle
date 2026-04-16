@@ -2,6 +2,7 @@ package ACLCapp;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.Statement;
 import java.util.Properties;
 import java.io.InputStream;
 import javax.crypto.Cipher;
@@ -32,6 +33,7 @@ public class DBConnection {
             throw new RuntimeException("Failed to load encrypted configuration: " + e.getMessage(), e);
         }
     }
+    
     public static Connection getConnection() {
         Connection conn = getMySQLConnection();
         if (conn == null) {
@@ -43,8 +45,11 @@ public class DBConnection {
     public static boolean unlock(String password) {
         String correct = props.getProperty("app.password");
         unlocked = correct != null && correct.equals(password);
-        if (unlocked) System.out.println("[DB] App unlocked successfully.");
-        else System.err.println("[DB] Unlock failed. Wrong password.");
+        if (unlocked) {
+            System.out.println("[DB] ✅ App unlocked successfully.");
+        } else {
+            System.err.println("[DB] ❌ Unlock failed. Wrong password.");
+        }
         return unlocked;
     }
 
@@ -62,10 +67,10 @@ public class DBConnection {
                 mysqlConnection = DriverManager.getConnection(url,
                         props.getProperty("mysql.user"),
                         props.getProperty("mysql.password"));
-                System.out.println("[MySQL] Connected to MySQL server.");
+                System.out.println("[MySQL] ✅ Connected to MySQL server.");
             }
         } catch (Exception e) {
-            System.err.println("[MySQL] Connection failed: " + e.getMessage());
+            System.err.println("[MySQL] ❌ Connection failed: " + e.getMessage());
             mysqlConnection = null;
         }
         return mysqlConnection;
@@ -79,27 +84,68 @@ public class DBConnection {
         try {
             if (sqliteConnection == null || sqliteConnection.isClosed()) {
                 Class.forName("org.sqlite.JDBC");
-                String dbFile = props.getProperty("sqlite.file"); // e.g., "aclcsqlitedb.db"
+                String dbFile = props.getProperty("sqlite.file", "aclcsqlitedb.db");
 
-            // Use LOCALAPPDATA for writable storage (per‑user, not synced)
+                // Use LOCALAPPDATA for writable storage (per-user, not synced)
                 String localAppData = System.getenv("LOCALAPPDATA");
-                if (localAppData == null) localAppData = System.getProperty("user.home"); // fallback
+                if (localAppData == null) {
+                    localAppData = System.getProperty("user.home");
+                }
                 String appFolder = localAppData + java.io.File.separator + "ACLC Research Title";
                 java.io.File folder = new java.io.File(appFolder);
                 if (!folder.exists()) {
-                folder.mkdirs(); // create folder if it doesn't exist
+                    folder.mkdirs();
+                    System.out.println("[SQLite] Created app folder: " + appFolder);
                 }
                 String dbPath = appFolder + java.io.File.separator + dbFile;
                 String url = "jdbc:sqlite:" + dbPath;
 
                 System.out.println("[SQLite] Opening DB at: " + url);
                 sqliteConnection = DriverManager.getConnection(url);
-                System.out.println("[SQLite] Connected to SQLite database.");
+                
+                // Initialize basic table structure if needed
+                initializeSQLiteTable(sqliteConnection);
+                
+                System.out.println("[SQLite] ✅ Connected to SQLite database.");
             }
         } catch (Exception e) {
-            System.err.println("[SQLite] Connection failed: " + e.getMessage());
+            System.err.println("[SQLite] ❌ Connection failed: " + e.getMessage());
             sqliteConnection = null;
         }
         return sqliteConnection;
+    }
+    
+    private static void initializeSQLiteTable(Connection sqlite) {
+        String createTableSQL = 
+            "CREATE TABLE IF NOT EXISTS ACLC_research_titles (" +
+            "    ID INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "    \"Research Title\" TEXT NOT NULL," +
+            "    \"SY-YR\" TEXT," +
+            "    \"Status\" TEXT," +
+            "    \"Applied\" TEXT," +
+            "    \"Strand\" TEXT," +
+            "    \"Software\" TEXT," +
+            "    \"Webpage\" TEXT" +
+            ")";
+        
+        try (Statement stmt = sqlite.createStatement()) {
+            stmt.execute(createTableSQL);
+            System.out.println("[SQLite] Table structure verified.");
+        } catch (Exception e) {
+            System.err.println("[SQLite] Failed to create table: " + e.getMessage());
+        }
+    }
+    
+    public static void closeConnections() {
+        try {
+            if (mysqlConnection != null && !mysqlConnection.isClosed()) {
+                mysqlConnection.close();
+            }
+            if (sqliteConnection != null && !sqliteConnection.isClosed()) {
+                sqliteConnection.close();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }
