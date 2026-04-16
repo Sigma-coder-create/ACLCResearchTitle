@@ -16,9 +16,9 @@ public class DBSync {
     public static void syncTwoWay() {
         Connection mysql = null;
         Connection sqlite = null;
-        
+    
         try {
-            mysql = DBConnection.getMySQLConnection();
+            // ✅ SQLITE FIRST! (offline priority)
             sqlite = DBConnection.getSQLiteConnection();
 
             if (sqlite == null) {
@@ -27,11 +27,14 @@ public class DBSync {
             }
 
             System.out.println("[Sync] Starting two-way synchronization...");
-            
+        
             // CRITICAL: Ensure SQLite has the proper schema with last_updated column
             ensureSQLiteSchema(sqlite);
             sqlite.createStatement().execute("PRAGMA schema_version;");
-            
+
+            // ✅ MySQL SECOND (only if online)
+            mysql = DBConnection.getMySQLConnection();
+        
             if (mysql != null) {
                 // Check if MySQL has last_updated column
                 if (!hasLastUpdatedColumn(mysql)) {
@@ -39,7 +42,7 @@ public class DBSync {
                     System.err.println("[Sync] ALTER TABLE ACLC_research_titles ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;");
                     basicSyncMySQLtoSQLite(mysql, sqlite);
                 } else {
-                    // Both databases have last_updated - do full two-way sync
+                // Both databases have last_updated - do full two-way sync
                     syncFromMySQLToSQLite(mysql, sqlite);
                     syncFromSQLiteToMySQL(sqlite, mysql);
                 }

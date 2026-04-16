@@ -3,7 +3,6 @@ package ACLCapp;
 import Test.StudentWindowGUI;
 import javax.swing.*;
 import javax.swing.SwingUtilities;
-import java.sql.Connection;
 
 public class Main {
     public static void main(String[] args) {
@@ -23,29 +22,14 @@ public class Main {
             System.exit(0);
         }
 
-        // Now safe to access the databases
-        try (Connection mysqlConn = DBConnection.getMySQLConnection();
-             Connection sqliteConn = DBConnection.getSQLiteConnection()) {
+        // DBSync handles connections internally (SQLite first, MySQL optional)
+        DBSync.insertTestDataIfEmpty();
+        DBSync.syncResearchTitles();
 
-            if (mysqlConn != null) {
-                System.out.println("✅ Connected to remote MySQL database.");
-            }
-            if (sqliteConn != null) {
-                System.out.println("✅ Connected to local SQLite database.");
-            }
+        // 🚀 Initialize the self-learning similarity system after syncing
+        SimilarityUtil.initializeFromDatabases();
 
-            DBSync.insertTestDataIfEmpty();
-            DBSync.syncResearchTitles();
-
-            // 🚀 Initialize the self-learning similarity system after syncing both DBs
-            SimilarityUtil.initializeFromDatabases();
-
-        } catch (Exception e) {
-            System.err.println("❌ Database sync error: " + e.getMessage());
-            e.printStackTrace();
-        }
-
-        // Launch GUI as before
+        // Launch GUI
         SwingUtilities.invokeLater(() -> {
             try {
                 StudentWindowGUI window = new StudentWindowGUI();
