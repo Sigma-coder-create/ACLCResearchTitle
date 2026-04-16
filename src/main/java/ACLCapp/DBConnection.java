@@ -3,6 +3,7 @@ package ACLCapp;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.sql.ResultSet;
 import java.util.Properties;
 import java.io.InputStream;
 import javax.crypto.Cipher;
@@ -35,11 +36,22 @@ public class DBConnection {
     }
     
     public static Connection getConnection() {
-        Connection conn = getMySQLConnection();
-        if (conn == null) {
-            conn = getSQLiteConnection();
+        // Try SQLite FIRST (always works offline)
+        Connection conn = getSQLiteConnection();
+        if (conn != null) {
+            System.out.println("[DB] Using SQLite (offline/local mode)");
+            return conn;
         }
-        return conn;
+        
+        // If SQLite fails, try MySQL
+        conn = getMySQLConnection();
+        if (conn != null) {
+            System.out.println("[DB] Using MySQL (online mode)");
+            return conn;
+        }
+        
+        System.err.println("[DB] ❌ No database connection available!");
+        return null;
     }
 
     public static boolean unlock(String password) {
@@ -58,12 +70,19 @@ public class DBConnection {
             System.err.println("[MySQL] Access denied. Unlock first.");
             return null;
         }
+        
+        // Quick check: if no network, skip MySQL entirely
+        if (!isNetworkAvailable()) {
+            System.out.println("[MySQL] No network detected - skipping MySQL");
+            return null;
+        }
+        
         try {
             if (mysqlConnection == null || mysqlConnection.isClosed()) {
                 Class.forName("com.mysql.cj.jdbc.Driver");
                 String url = "jdbc:mysql://" + props.getProperty("mysql.host") + ":" +
                         props.getProperty("mysql.port") + "/" + props.getProperty("mysql.db") +
-                        "?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
+                        "?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&connectTimeout=3000";
                 mysqlConnection = DriverManager.getConnection(url,
                         props.getProperty("mysql.user"),
                         props.getProperty("mysql.password"));
@@ -94,8 +113,10 @@ public class DBConnection {
                 String appFolder = localAppData + java.io.File.separator + "ACLC Research Title";
                 java.io.File folder = new java.io.File(appFolder);
                 if (!folder.exists()) {
-                    folder.mkdirs();
-                    System.out.println("[SQLite] Created app folder: " + appFolder);
+                    boolean created = folder.mkdirs();
+                    if (created) {
+                        System.out.println("[SQLite] Created app folder: " + appFolder);
+                    }
                 }
                 String dbPath = appFolder + java.io.File.separator + dbFile;
                 String url = "jdbc:sqlite:" + dbPath;
@@ -125,14 +146,42 @@ public class DBConnection {
             "    \"Applied\" TEXT," +
             "    \"Strand\" TEXT," +
             "    \"Software\" TEXT," +
-            "    \"Webpage\" TEXT" +
+            "    \"Webpage\" TEXT," +
+            "    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
             ")";
         
         try (Statement stmt = sqlite.createStatement()) {
             stmt.execute(createTableSQL);
+            
+            // Check if last_updated column exists (for old databases)
+            boolean hasLastUpdated = false;
+            try (ResultSet rs = stmt.executeQuery("PRAGMA table_info(ACLC_research_titles)")) {
+                while (rs.next()) {
+                    if ("last_updated".equals(rs.getString("name"))) {
+                        hasLastUpdated = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (!hasLastUpdated) {
+                stmt.execute("ALTER TABLE ACLC_research_titles ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+                System.out.println("[SQLite] Added missing last_updated column.");
+            }
+            
             System.out.println("[SQLite] Table structure verified.");
         } catch (Exception e) {
             System.err.println("[SQLite] Failed to create table: " + e.getMessage());
+        }
+    }
+    
+    // Helper method to check if network is available
+    private static boolean isNetworkAvailable() {
+        try {
+            java.net.InetAddress addr = java.net.InetAddress.getByName("8.8.8.8");
+            return addr.isReachable(2000); // 2 second timeout
+        } catch (Exception e) {
+            return false;
         }
     }
     

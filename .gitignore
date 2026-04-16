@@ -18,3 +18,25 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# Installers and portable builds
+installer/*.exe
+portable/
+*.exe
+
+# IDE files
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# System files
+desktop.ini
+$RECYCLE.BIN/
