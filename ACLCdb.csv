@@ -1,0 +1,15 @@
+dbms,TABLE_SCHEMA,TABLE_NAME,COLUMN_NAME,ORDINAL_POSITION,DATA_TYPE,CHARACTER_MAXIMUM_LENGTH,CONSTRAINT_TYPE,REFERENCED_TABLE_SCHEMA,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME
+mysql,mysqldb,aclc_research_titles,Applied,6,enum,7,NULL,NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,"Approved by",5,varchar,100,NULL,NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,id,1,int,NULL,"PRIMARY KEY",NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,last_updated,10,timestamp,NULL,NULL,NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,"Research Title",2,varchar,255,NULL,NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,Software,8,enum,1,NULL,NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,Status,4,enum,8,NULL,NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,Strand,7,enum,3,NULL,NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,SY-YR,3,varchar,15,NULL,NULL,NULL,NULL
+mysql,mysqldb,aclc_research_titles,Webpage,9,enum,1,NULL,NULL,NULL,NULL
+mysql,sys,sys_config,set_by,4,varchar,128,NULL,NULL,NULL,NULL
+mysql,sys,sys_config,set_time,3,timestamp,NULL,NULL,NULL,NULL,NULL
+mysql,sys,sys_config,value,2,varchar,128,NULL,NULL,NULL,NULL
+mysql,sys,sys_config,variable,1,varchar,128,"PRIMARY KEY",NULL,NULL,NULL

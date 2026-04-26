@@ -1,6 +1,7 @@
 
 package Test;
 
+import java.awt.*;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -21,14 +22,16 @@ import Test.ButtonRenderer;
 import Test.SettingsFrame;
 import com.formdev.flatlaf.FlatLightLaf;
 import com.formdev.flatlaf.FlatDarkLaf;
+import java.sql.Statement;
 
 
     public class StudentWindowGUI extends javax.swing.JFrame {
-        private boolean showEditButton = false;
+        private boolean showEditButton = true;
         private boolean deleteMode = false;
         private int selectedId = -1;
         private String column = "Research Title"; // default search column
-
+        private JPanel suggestionPanel;
+    
     // popup for suggestions (you already declared jPopupMenu1 in the form; we use it)
 
     public boolean isShowEditButton() {
@@ -47,6 +50,7 @@ import com.formdev.flatlaf.FlatDarkLaf;
         this.deleteMode = deleteMode;
     }
 
+    
     public StudentWindowGUI() {
         try {
             FlatLightLaf.setup(); // default light theme
@@ -56,6 +60,12 @@ import com.formdev.flatlaf.FlatDarkLaf;
         }
 
         initComponents();
+            boolean online = isOnline();
+            
+            Add.setEnabled(online);
+            Edit.setEnabled(online);
+            Delete.setEnabled(online);
+            
 
         if (jPopupMenu1 == null) {
             jPopupMenu1 = new JPopupMenu();
@@ -107,6 +117,13 @@ import com.formdev.flatlaf.FlatDarkLaf;
                 }
             }
         });
+    }
+    private boolean isOnline() {
+        try (Connection con = DBConnection.getMySQLConnection()) {
+            return con != null;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private boolean isValidResearchTitle(String title) {
@@ -174,20 +191,38 @@ import com.formdev.flatlaf.FlatDarkLaf;
     }
     
     private void loadResearchTitles(String filter) {
-        int providedColumn = table.getColumnModel().getColumnIndex("Provided");
-        table.getColumnModel().getColumn(providedColumn).setCellRenderer(new ButtonRenderer(this));
-        table.getColumnModel().getColumn(providedColumn).setCellEditor(new ButtonEditor(table, this));
+        if (table.isEditing()) {
+            table.getCellEditor().stopCellEditing();
+        }
+
+        int providedColumn = -1;
+        try {
+            providedColumn = table.getColumnModel().getColumnIndex("Provided");
+        } catch (IllegalArgumentException e) {
+            return; // column not found, skip
+        }
+        if (showEditButton) {
+            // Show the button column
+            table.getColumnModel().getColumn(providedColumn).setCellRenderer(new ButtonRenderer(this));
+            table.getColumnModel().getColumn(providedColumn).setCellEditor(new ButtonEditor(table, this));
+        } else {
+            // Hide the button column by removing renderer/editor
+            table.getColumnModel().getColumn(providedColumn).setCellRenderer(null);
+            table.getColumnModel().getColumn(providedColumn).setCellEditor(null);
+        }
+    
         DefaultTableModel model = (DefaultTableModel) table.getModel();
         model.setRowCount(0);
 
-        String sql = "SELECT `ID`, `Research Title`, `SY-YR`, `Status`, `Applied`, `Strand`, `Software`, `Webpage` FROM ACLC_research_titles";
+        String sql = "SELECT `ID`, `Research Title`, `SY-YR`, `Status`, `Approved by`, `Applied`, `Strand`, `Software`, `Webpage` " +
+             "FROM ACLC_research_titles WHERE record_state = 'ACTIVE'";
         boolean hasFilter = filter != null && !filter.isEmpty();
         if (hasFilter && column != null) {
         String col = getSafeColumn();
-            sql += " WHERE `" + col + "` LIKE ?";
+            sql += " AND `" + col + "` LIKE ?";
         }
 
-        // Try MySQL first
+        // Try sqlite first
         Connection con = null;
         try {
             con = DBConnection.getMySQLConnection();
@@ -207,6 +242,13 @@ import com.formdev.flatlaf.FlatDarkLaf;
         }
 
         try (PreparedStatement ps = con.prepareStatement(sql)) {
+            System.out.println("========== DEBUG ==========");
+            System.out.println("SQL Query: " + sql);
+            System.out.println("Filter Value: " + filter);
+            System.out.println("Column Used: " + column);
+            System.out.println("Has Filter: " + hasFilter);
+            System.out.println("===========================");
+
             if (hasFilter) {
                 ps.setString(1, "%" + filter + "%");
             }
@@ -218,6 +260,7 @@ import com.formdev.flatlaf.FlatDarkLaf;
                     rs.getString("Research Title"),
                     rs.getString("SY-YR"),
                     rs.getString("Status"),
+                    rs.getString("Approved by"),
                     rs.getString("Applied"),
                     rs.getString("Strand"),
                     rs.getString("Software"),
@@ -231,9 +274,51 @@ import com.formdev.flatlaf.FlatDarkLaf;
             JOptionPane.showMessageDialog(this, "Error loading data: " + e.getMessage());
         }
     }
+private void loadData() {
+    DefaultTableModel model = (DefaultTableModel) table.getModel();
+    model.setRowCount(0);
+
+    String sql = "SELECT ID, `Research Title`, `SY-YR`, Status, `Approved by`, Applied, Strand, Software, Webpage " +
+                 "FROM ACLC_research_titles WHERE record_state = 'ACTIVE'";
+
+    try (Connection con = DBConnection.getConnection();
+         PreparedStatement ps = con.prepareStatement(sql);
+         ResultSet rs = ps.executeQuery()) {
+
+        while (rs.next()) {
+            model.addRow(new Object[]{
+                rs.getInt("ID"),
+                rs.getString("Research Title"),
+                rs.getString("SY_YR"),
+                rs.getString("Status"),
+                rs.getString("Approved by"),
+                rs.getString("Applied"),
+                rs.getString("Strand"),
+                rs.getString("Software"),
+                rs.getString("Webpage")
+            });
+        }
+
+        System.out.println("[GUI] Loaded from: " + con.getMetaData().getURL());
+
+    } catch (SQLException e) {
+        e.printStackTrace();
+    }
+}
+    private Connection getBestConnection() throws SQLException {
+        Connection con = DBConnection.getMySQLConnection();
+        if (con != null) {
+            return con; // Online mode
+        }
+        con = DBConnection.getSQLiteConnection();
+        if (con != null) {
+            return con; // Offline mode
+        }
+        throw new SQLException("Both MySQL and SQLite are offline!");
+    }
     
     private boolean confirmIfSimilarTitle(String newTitle, int currentId) {
-        try (Connection con = ACLCapp.DBConnection.getMySQLConnection();
+        try (Connection con = getBestConnection();
              PreparedStatement ps = con.prepareStatement(
                  "SELECT ID, `Research Title` FROM ACLC_research_titles"
              )) {
@@ -301,7 +386,7 @@ import com.formdev.flatlaf.FlatDarkLaf;
         String col = getSafeColumn();
         String sql = "SELECT `" + col + "` FROM ACLC_research_titles WHERE `" + col + "` LIKE ? LIMIT 5";
 
-        try (Connection con = DBConnection.getMySQLConnection();
+        try (Connection con = getBestConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
 
             ps.setString(1, "%" + text + "%");
@@ -355,9 +440,10 @@ import com.formdev.flatlaf.FlatDarkLaf;
         txt = new textfield.TextFieldSearchOption();
         jScrollPane1 = new javax.swing.JScrollPane();
         table = new javax.swing.JTable();
-        Delete = new javax.swing.JButton();
         Edit = new javax.swing.JButton();
+        Storage = new javax.swing.JButton();
         Add = new javax.swing.JButton();
+        Delete = new javax.swing.JButton();
         Settings = new javax.swing.JButton();
 
         javax.swing.GroupLayout jFrame1Layout = new javax.swing.GroupLayout(jFrame1.getContentPane());
@@ -386,7 +472,7 @@ import com.formdev.flatlaf.FlatDarkLaf;
 
             },
             new String [] {
-                "ID", "Research Title", "SY-YR", "Status", "Applied", "Strand", "Software", "Webpage", "Provided"
+                "ID", "Research Title", "SY-YR", "Status", "Approved by", "Applied", "Strand", "Software", "Webpage", "Provided"
             }
         ));
         jScrollPane1.setViewportView(table);
@@ -396,13 +482,6 @@ import com.formdev.flatlaf.FlatDarkLaf;
             table.getColumnModel().getColumn(0).setMaxWidth(0);
         }
 
-        Delete.setIcon(new javax.swing.ImageIcon(getClass().getResource("/Delete-button.png"))); // NOI18N
-        Delete.addActionListener(new java.awt.event.ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent evt) {
-                DeleteActionPerformed(evt);
-            }
-        });
-
         Edit.setIcon(new javax.swing.ImageIcon(getClass().getResource("/Edit-button.png"))); // NOI18N
         Edit.setInheritsPopupMenu(true);
         Edit.addActionListener(new java.awt.event.ActionListener() {
@@ -411,14 +490,32 @@ import com.formdev.flatlaf.FlatDarkLaf;
             }
         });
 
+        Storage.setIcon(new javax.swing.ImageIcon(getClass().getResource("/Storage.png"))); // NOI18N
+        Storage.setInheritsPopupMenu(true);
+        Storage.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                StorageActionPerformed(evt);
+            }
+        });
+
         Add.setIcon(new javax.swing.ImageIcon(getClass().getResource("/add-button.png"))); // NOI18N
+        Add.setInheritsPopupMenu(true);
         Add.addActionListener(new java.awt.event.ActionListener() {
             public void actionPerformed(java.awt.event.ActionEvent evt) {
                 AddActionPerformed(evt);
             }
         });
 
-        Settings.setIcon(new javax.swing.ImageIcon(getClass().getResource("/settings.jpg"))); // NOI18N
+        Delete.setIcon(new javax.swing.ImageIcon(getClass().getResource("/Delete-button.png"))); // NOI18N
+        Delete.setInheritsPopupMenu(true);
+        Delete.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                DeleteActionPerformed(evt);
+            }
+        });
+
+        Settings.setIcon(new javax.swing.ImageIcon(getClass().getResource("/settings.png"))); // NOI18N
+        Settings.setInheritsPopupMenu(true);
         Settings.addActionListener(new java.awt.event.ActionListener() {
             public void actionPerformed(java.awt.event.ActionEvent evt) {
                 SettingsActionPerformed(evt);
@@ -431,14 +528,16 @@ import com.formdev.flatlaf.FlatDarkLaf;
             layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(layout.createSequentialGroup()
                 .addContainerGap()
-                .addComponent(Settings, javax.swing.GroupLayout.PREFERRED_SIZE, 43, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addComponent(Settings, javax.swing.GroupLayout.PREFERRED_SIZE, 32, javax.swing.GroupLayout.PREFERRED_SIZE)
                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                .addComponent(Storage, javax.swing.GroupLayout.PREFERRED_SIZE, 32, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addGap(18, 18, 18)
                 .addComponent(Add, javax.swing.GroupLayout.PREFERRED_SIZE, 32, javax.swing.GroupLayout.PREFERRED_SIZE)
                 .addGap(18, 18, 18)
                 .addComponent(Edit, javax.swing.GroupLayout.PREFERRED_SIZE, 32, javax.swing.GroupLayout.PREFERRED_SIZE)
                 .addGap(18, 18, 18)
                 .addComponent(Delete, javax.swing.GroupLayout.PREFERRED_SIZE, 32, javax.swing.GroupLayout.PREFERRED_SIZE)
-                .addGap(18, 18, 18)
+                .addGap(24, 24, 24)
                 .addComponent(txt, javax.swing.GroupLayout.PREFERRED_SIZE, 181, javax.swing.GroupLayout.PREFERRED_SIZE))
             .addComponent(jScrollPane1, javax.swing.GroupLayout.Alignment.TRAILING, javax.swing.GroupLayout.DEFAULT_SIZE, 632, Short.MAX_VALUE)
         );
@@ -446,15 +545,13 @@ import com.formdev.flatlaf.FlatDarkLaf;
             layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(layout.createSequentialGroup()
                 .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                    .addComponent(Add, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
-                    .addComponent(Delete, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
-                    .addGroup(layout.createSequentialGroup()
-                        .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                            .addComponent(Edit, javax.swing.GroupLayout.PREFERRED_SIZE, 36, javax.swing.GroupLayout.PREFERRED_SIZE)
-                            .addComponent(txt, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE))
-                        .addGap(0, 0, Short.MAX_VALUE))
-                    .addComponent(Settings, javax.swing.GroupLayout.Alignment.TRAILING, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
-                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                    .addComponent(Edit, javax.swing.GroupLayout.PREFERRED_SIZE, 36, javax.swing.GroupLayout.PREFERRED_SIZE)
+                    .addComponent(txt, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
+                    .addComponent(Storage, javax.swing.GroupLayout.PREFERRED_SIZE, 36, javax.swing.GroupLayout.PREFERRED_SIZE)
+                    .addComponent(Add, javax.swing.GroupLayout.PREFERRED_SIZE, 36, javax.swing.GroupLayout.PREFERRED_SIZE)
+                    .addComponent(Delete, javax.swing.GroupLayout.PREFERRED_SIZE, 36, javax.swing.GroupLayout.PREFERRED_SIZE)
+                    .addComponent(Settings, javax.swing.GroupLayout.PREFERRED_SIZE, 36, javax.swing.GroupLayout.PREFERRED_SIZE))
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
                 .addComponent(jScrollPane1, javax.swing.GroupLayout.DEFAULT_SIZE, 395, Short.MAX_VALUE))
         );
 
@@ -479,151 +576,228 @@ import com.formdev.flatlaf.FlatDarkLaf;
         }
     }//GEN-LAST:event_txtActionPerformed
 
-    private void AddActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_AddActionPerformed
-        javax.swing.JTextField titleField = new javax.swing.JTextField();
-        javax.swing.JTextField syyrField = new javax.swing.JTextField();
-
-        String[] statusOptions = {"Denied", "Pending", "Approved"};
-        javax.swing.JComboBox<String> statusBox = new javax.swing.JComboBox<>(statusOptions);
-
-        String[] appliedOptions = {"Yes", "Not Yet", "No"};
-        javax.swing.JComboBox<String> appliedBox = new javax.swing.JComboBox<>(appliedOptions);
-
-        String[] strands = {"ICT", "GAS"};
-        javax.swing.JComboBox<String> strandBox = new javax.swing.JComboBox<>(strands);
-
-        String[] checkOptions = {"✔", "✘"};
-        javax.swing.JComboBox<String> softwareBox = new javax.swing.JComboBox<>(checkOptions);
-        javax.swing.JComboBox<String> webpageBox = new javax.swing.JComboBox<>(checkOptions);
-
-        Object[] message = {
-            "Research Title:", titleField,
-            "SY-YR:", syyrField,
-            "Status:", statusBox,
-            "Applied:", appliedBox,
-            "Strand:", strandBox,
-            "Software:", softwareBox,
-            "Webpage:", webpageBox
-        };
-
-        javax.swing.ImageIcon amaIcon = new javax.swing.ImageIcon(getClass().getResource("/AMA.png"));
-        int option = javax.swing.JOptionPane.showConfirmDialog(
-            this,
-            message,
-            "Add Research Title",
-            javax.swing.JOptionPane.OK_CANCEL_OPTION,
-            javax.swing.JOptionPane.PLAIN_MESSAGE,
-            amaIcon
-        );
-
-        if (option == javax.swing.JOptionPane.OK_OPTION) {
-            String title = titleField.getText().trim();
-            String syyr = syyrField.getText().trim();
-            
-            if (!isValidResearchTitle(title)
-                    || !looksLikeAResearchTitle(title)
-                    || !isValidSchoolYear(syyr)) {
-                return;
-            }
-            
-            String status = (String) statusBox.getSelectedItem();
-            String applied = (String) appliedBox.getSelectedItem();
-            String strand = (String) strandBox.getSelectedItem();
-            String software = (String) softwareBox.getSelectedItem();
-            String webpage = (String) webpageBox.getSelectedItem();
-
-            if (title.isEmpty()) {
-                javax.swing.JOptionPane.showMessageDialog(this, "Research Title cannot be empty!");
-                return;
-            }
-
-            String[] bannedWords = {"warren sarap sarap"};
-            for (String bad : bannedWords) {
-                if (title.toLowerCase().contains(bad)) {
-                    javax.swing.JOptionPane.showMessageDialog(this,
-                        "Your title contains inappropriate or invalid words. Please rename it.");
-                    return;
-                }
-            }
-
-            try (Connection con = ACLCapp.DBConnection.getMySQLConnection()) {
-                if (con == null) {
-                    javax.swing.JOptionPane.showMessageDialog(this, "Database connection failed!");
-                    return;
-                }
-
-                java.sql.Statement st = con.createStatement();
-                java.sql.ResultSet rs = st.executeQuery("SELECT `Research Title` FROM ACLC_research_titles");
-
-                boolean tooSimilar = false;
-                String similarTo = "";
-                double highestSim = 0.0;
-
-                while (rs.next()) {
-                    String existing = rs.getString("Research Title");
-                    double sim = SimilarityUtil.similarityScore(title, existing);
-                    if (sim > highestSim) {
-                        highestSim = sim;
-                        similarTo = existing;
-                    }
-                    if (sim >= 0.7) {
-                        tooSimilar = true;
-                    }
-                }
-                rs.close();
-                st.close();
-
-                double percent = highestSim * 100.0;
-                String msg = String.format("Highest similarity: %.2f%%\nMost similar title:\n\"%s\"", percent, similarTo);
-
-            // --- Confirmation before adding ---
-                if (tooSimilar) {
-                    int confirm = javax.swing.JOptionPane.showConfirmDialog(
-                        this,
-                        msg + "\n\n⚠️ This title is " + (int)percent + "% similar to an existing one.\nDo you still want to add it?",
-                        "Possible Duplicate",
-                        javax.swing.JOptionPane.YES_NO_OPTION,
-                        javax.swing.JOptionPane.WARNING_MESSAGE
-                    );
-
-                    if (confirm != javax.swing.JOptionPane.YES_OPTION) {
-                        javax.swing.JOptionPane.showMessageDialog(this, "Add operation cancelled.");
-                        return;
-                    }
-                } else {
-                    javax.swing.JOptionPane.showMessageDialog(this,
-                        msg + "\n\n✅ Your title is unique enough. Proceeding to add.");
-                }
-
-            // --- Insert only after confirmation ---
-                String sql = "INSERT INTO ACLC_research_titles (`Research Title`, `SY-YR`, Status, Applied, Strand, Software, Webpage) VALUES (?, ?, ?, ?, ?, ?, ?)";
-                PreparedStatement ps = con.prepareStatement(sql);
-                ps.setString(1, title);
-                ps.setString(2, syyr);
-                ps.setString(3, status);
-                ps.setString(4, applied);
-                ps.setString(5, strand);
-                ps.setString(6, software);
-                ps.setString(7, webpage);
-                ps.executeUpdate();
-                ps.close();
-
-                javax.swing.JOptionPane.showMessageDialog(this, "✅ Research Title added successfully!");
-                loadResearchTitles("");
-
-            } catch (Exception e) {
-                e.printStackTrace();
-                javax.swing.JOptionPane.showMessageDialog(this, "Error adding research title: " + e.getMessage());
-            }
-        }
-    }//GEN-LAST:event_AddActionPerformed
-
     private void EditActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_EditActionPerformed
         setDeleteMode(false); 
         table.repaint();
         javax.swing.JOptionPane.showMessageDialog(this, "Switched to EDIT mode. Click row buttons to edit.");
     }//GEN-LAST:event_EditActionPerformed
  
+    private void StorageActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_StorageActionPerformed
+        new StorageFrame().setVisible(true);
+    }//GEN-LAST:event_StorageActionPerformed
+
+    private void AddActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_AddActionPerformed
+        JTextField titleField = new JTextField();
+        JTextField syyrField = new JTextField();
+        
+        JComboBox<String> statusBox = new JComboBox<>(new String[]{"Denied", "Pending", "Approved"});
+        
+        JTextField approvedByField = new JTextField();
+        
+        JComboBox<String> appliedBox = new JComboBox<>(new String[]{"Yes", "Not yet", "No"});
+        
+        JComboBox<String> strandBox = new JComboBox<>(new String[]{"ICT", "GAS"});
+        
+        JComboBox<String> softwareBox = new JComboBox<>(new String[]{"✔", "✘"});
+        
+        JComboBox<String> webpageBox = new JComboBox<>(new String[]{"✔", "✘"});
+       // Create the form panel
+        JPanel formPanel = new JPanel(new GridLayout(8, 2, 5, 5));
+        formPanel.add(new JLabel("Research Title:")); formPanel.add(titleField);
+        formPanel.add(new JLabel("SY-YR:")); formPanel.add(syyrField);
+        formPanel.add(new JLabel("Status:")); formPanel.add(statusBox);
+        formPanel.add(new JLabel("Approved by:")); formPanel.add(approvedByField);
+        formPanel.add(new JLabel("Applied:")); formPanel.add(appliedBox);
+        formPanel.add(new JLabel("Strand:")); formPanel.add(strandBox);
+        formPanel.add(new JLabel("Software:")); formPanel.add(softwareBox);
+        formPanel.add(new JLabel("Webpage:")); formPanel.add(webpageBox);
+
+        // Live suggestion panel
+        JPanel suggestionPanel = new JPanel(new GridLayout(3, 1, 5, 5));
+        JPanel mainPanel = new JPanel(new BorderLayout(0, 10));
+        mainPanel.add(formPanel, BorderLayout.NORTH);
+        mainPanel.add(suggestionPanel, BorderLayout.SOUTH);
+
+        // Live similarity listener
+        titleField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            private void update() {
+                if (!ACLCapp.AppSettings.SUGGESTIONS_ENABLED) {
+                    suggestionPanel.removeAll();
+                    suggestionPanel.repaint();
+                    return;
+                }
+                suggestionPanel.removeAll();
+                java.util.List<TitleMatch> matches = getTopSimilarTitles(titleField.getText());
+                for (TitleMatch m : matches) {
+                    SuggestionCard card = new SuggestionCard(m.title, m.score, titleField);
+                    suggestionPanel.add(card);
+                }
+                suggestionPanel.revalidate();
+                suggestionPanel.repaint();
+                // Resize dialog to fit new cards
+                java.awt.Window w = SwingUtilities.getWindowAncestor(mainPanel);
+                if (w != null) w.pack();
+            }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { update(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { update(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { update(); }
+        });
+
+        ImageIcon amaIcon = new ImageIcon(getClass().getResource("/AMA.png"));
+
+        int option = JOptionPane.showConfirmDialog(
+            this, mainPanel, "Add Research Title",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            amaIcon
+        );
+
+        String title = titleField.getText().trim();
+        String syyr = syyrField.getText().trim();
+        String approvedby = approvedByField.getText().trim();
+
+        if (!isValidResearchTitle(title)
+                || !looksLikeAResearchTitle(title)
+                || !isValidSchoolYear(syyr)) {
+            return;
+        }
+
+        if (title.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Research Title cannot be empty!");
+            return;
+        }
+
+        String[] bannedWords = {"warren sarap sarap"};
+        for (String bad : bannedWords) {
+            if (title.toLowerCase().contains(bad)) {
+                JOptionPane.showMessageDialog(this,
+                    "Your title contains inappropriate or invalid words.");
+                return;
+            }
+        }
+
+        String status = (String) statusBox.getSelectedItem();
+        String applied = (String) appliedBox.getSelectedItem();
+        String strand = (String) strandBox.getSelectedItem();
+        String software = (String) softwareBox.getSelectedItem();
+        String webpage = (String) webpageBox.getSelectedItem();
+
+        Connection con = null;
+
+        try {
+            con = DBConnection.getMySQLConnection();
+        } catch (Exception e) {
+            con = null;
+        }
+
+        // =========================
+        // 🔴 OFFLINE MODE
+        // =========================
+        if (con == null) {
+            try (Connection sqlite = DBConnection.getSQLiteConnection()) {
+
+                String sql = "INSERT INTO ACLC_research_titles " +
+                             "(`Research Title`, `SY-YR`, `Status`, `Approved by`, `Applied`, `Strand`, `Software`, `Webpage`, record_state) " +
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_ADD')";
+
+                PreparedStatement ps = sqlite.prepareStatement(sql);
+                ps.setString(1, title);
+                ps.setString(2, syyr);
+                ps.setString(3, status);
+                ps.setString(4, approvedby);
+                ps.setString(5, applied);
+                ps.setString(6, strand);
+                ps.setString(7, software);
+                ps.setString(8, webpage);
+
+                ps.executeUpdate();
+                ps.close();
+
+                JOptionPane.showMessageDialog(this, "📦 Saved OFFLINE (Storage)");
+                loadResearchTitles("");
+                return;
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                JOptionPane.showMessageDialog(this, "Offline save failed: " + e.getMessage());
+                return;
+            }
+        }
+
+        // =========================
+        // 🟢 ONLINE MODE
+        // =========================
+        try {
+
+            Statement st = con.createStatement();
+            ResultSet rs = st.executeQuery("SELECT `Research Title` FROM ACLC_research_titles");
+
+            boolean tooSimilar = false;
+            String similarTo = "";
+            double highestSim = 0.0;
+
+            while (rs.next()) {
+                String existing = rs.getString("Research Title");
+                double sim = SimilarityUtil.similarityScore(title, existing);
+
+                if (sim > highestSim) {
+                    highestSim = sim;
+                    similarTo = existing;
+                }
+
+                if (sim >= 0.7) {
+                    tooSimilar = true;
+                }
+            }
+
+            rs.close();
+            st.close();
+
+            double percent = highestSim * 100.0;
+            String msg = String.format("Highest similarity: %.2f%%\nMost similar:\n\"%s\"", percent, similarTo);
+
+            if (tooSimilar) {
+                int confirm = JOptionPane.showConfirmDialog(
+                    this,
+                    msg + "\n\n⚠️ Still add?",
+                    "Possible Duplicate",
+                    JOptionPane.YES_NO_OPTION
+                );
+
+                if (confirm != JOptionPane.YES_OPTION) {
+                    JOptionPane.showMessageDialog(this, "Cancelled.");
+                    return;
+                }
+            } else {
+                JOptionPane.showMessageDialog(this, msg + "\n\n✅ Unique enough.");
+            }
+
+            String sql = "INSERT INTO ACLC_research_titles " +
+                         "(`Research Title`, `SY-YR`, `Status`, `Approved by`, `Applied`, `Strand`, `Software`, `Webpage`, record_state) " +
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')";
+
+            PreparedStatement ps = con.prepareStatement(sql);
+            ps.setString(1, title);
+            ps.setString(2, syyr);
+            ps.setString(3, status);
+            ps.setString(4, approvedby);
+            ps.setString(5, applied);
+            ps.setString(6, strand);
+            ps.setString(7, software);
+            ps.setString(8, webpage);
+
+            ps.executeUpdate();
+            ps.close();
+
+            JOptionPane.showMessageDialog(this, "✅ Added successfully!");
+            loadResearchTitles("");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+        }
+    }//GEN-LAST:event_AddActionPerformed
+
     private void DeleteActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_DeleteActionPerformed
         setDeleteMode(true); // Skibidi Moralidad.
         table.repaint();
@@ -633,145 +807,193 @@ import com.formdev.flatlaf.FlatDarkLaf;
     private void SettingsActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_SettingsActionPerformed
         new SettingsFrame().setVisible(true);
     }//GEN-LAST:event_SettingsActionPerformed
-    public void editRow(int row) {
-        if (row == -1) {
-            javax.swing.JOptionPane.showMessageDialog(this, "Please select a row to edit.");
+    public void editRow(int id) {
+        if (id <= 0) {
+            JOptionPane.showMessageDialog(this, "Invalid record ID.");
             return;
         }
 
-        int id = Integer.parseInt(table.getValueAt(row, 0).toString());
+        // Fetch the record from the database
+        String sql = "SELECT `Research Title`, `SY-YR`, `Status`, `Approved by`, `Applied`, `Strand`, `Software`, `Webpage` FROM ACLC_research_titles WHERE ID = ?";
 
-        String currentTitle = table.getValueAt(row, 1).toString();
-        String currentSY = table.getValueAt(row, 2).toString();
-        String currentStatus = table.getValueAt(row, 3).toString();
-        String currentApplied = table.getValueAt(row, 4).toString();
-        String currentStrand = table.getValueAt(row, 5).toString();
-        String currentSoftware = table.getValueAt(row, 6).toString();
-        String currentWebpage = table.getValueAt(row, 7).toString();
+        try (Connection con = getBestConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
 
-        JTextField titleField = new JTextField(currentTitle);
-        JTextField syyrField = new JTextField(currentSY);
+            ps.setInt(1, id);
+            ResultSet rs = ps.executeQuery();
 
-        JComboBox<String> statusBox = new JComboBox<>(new String[]{"Denied", "Pending", "Approved"});
-        statusBox.setSelectedItem(currentStatus);
-
-        JComboBox<String> appliedBox = new JComboBox<>(new String[]{"Yes", "Not Yet", "No"});
-        appliedBox.setSelectedItem(currentApplied);
-
-        JComboBox<String> strandBox = new JComboBox<>(new String[]{"ICT", "GAS"});
-        strandBox.setSelectedItem(currentStrand);
-
-        JComboBox<String> softwareBox = new JComboBox<>(new String[]{"✔", "✘"});
-        softwareBox.setSelectedItem(currentSoftware);
-
-        JComboBox<String> webpageBox = new JComboBox<>(new String[]{"✔", "✘"});
-        webpageBox.setSelectedItem(currentWebpage);
-
-
-        Object[] message = {
-            "Research Title:", titleField,
-            "SY-YR:", syyrField,
-            "Status:", statusBox,
-            "Applied:", appliedBox,
-            "Strand:", strandBox,
-            "Software:", softwareBox,
-            "Webpage:", webpageBox
-        };
-
-        ImageIcon amaIcon = new ImageIcon(getClass().getResource("/AMA.png"));
-        int option = JOptionPane.showConfirmDialog(
-            this,
-            message,
-            "Edit Research Title",
-            JOptionPane.OK_CANCEL_OPTION,
-            JOptionPane.PLAIN_MESSAGE,
-            amaIcon
-        );
-
-        
-        if (option == JOptionPane.OK_OPTION) {
-            String title = titleField.getText().trim();
-            String syyr = syyrField.getText().trim();
-
-            if (title.isEmpty()) {
-                JOptionPane.showMessageDialog(this, "Research Title cannot be empty!");
-                return;
-            }
-            
-            if (!looksLikeAResearchTitle(title)) {
+            if (!rs.next()) {
+                JOptionPane.showMessageDialog(this, "Record not found.");
                 return;
             }
 
-            if (!syyr.matches("\\d{4}-\\d{4}")) {
-                JOptionPane.showMessageDialog(this, "SY-YR must be in format YYYY-YYYY");
-                return;
-            }
-            
-            if (!confirmIfSimilarTitle(title, id)) {
-                return;
-            }
+            String currentTitle = rs.getString("Research Title");
+            String currentSY = rs.getString("SY-YR");
+            String currentStatus = rs.getString("Status");
+            String currentApprovedBy = rs.getString("Approved by");
+            String currentApplied = rs.getString("Applied");
+            String currentStrand = rs.getString("Strand");
+            String currentSoftware = rs.getString("Software");
+            String currentWebpage = rs.getString("Webpage");
+            rs.close();
 
-            String[] years = syyr.split("-");
-            int start = Integer.parseInt(years[0]);
-            int end = Integer.parseInt(years[1]);
+            // Build the edit dialog exactly as before
+            JTextField titleField = new JTextField(currentTitle);
+            JTextField syyrField = new JTextField(currentSY);
 
-            if (end != start + 1) {
-                JOptionPane.showMessageDialog(this,
-                    "SY-YR must be consecutive (e.g., 2024-2025)");
-                return;
-            }
+            JComboBox<String> statusBox = new JComboBox<>(new String[]{"Denied", "Pending", "Approved"});
+            statusBox.setSelectedItem(currentStatus);
 
-            try (Connection con = ACLCapp.DBConnection.getMySQLConnection();
-                 PreparedStatement ps = con.prepareStatement(
-                     "UPDATE ACLC_research_titles SET `Research Title`=?, `SY-YR`=?, Status=?, Applied=?, Strand=?, Software=?, Webpage=? WHERE ID=?"
-                 )) {
+            JTextField approvedbyField = new JTextField(currentApprovedBy);
 
-                ps.setString(1, title);
-                ps.setString(2, syyr);
-                ps.setString(3, (String) statusBox.getSelectedItem());
-                ps.setString(4, (String) appliedBox.getSelectedItem());
-                ps.setString(5, (String) strandBox.getSelectedItem());
-                ps.setString(6, (String) softwareBox.getSelectedItem());
-                ps.setString(7, (String) webpageBox.getSelectedItem());
-                ps.setInt(8, id);
+            JComboBox<String> appliedBox = new JComboBox<>(new String[]{"Yes", "Not yet", "No"});
+            appliedBox.setSelectedItem(currentApplied);
 
-                ps.executeUpdate();
-                JOptionPane.showMessageDialog(this, "Research Title updated successfully!");
-                loadResearchTitles("");
+            JComboBox<String> strandBox = new JComboBox<>(new String[]{"ICT", "GAS"});
+            strandBox.setSelectedItem(currentStrand);
 
-            } catch (Exception e) {
-                e.printStackTrace();
-                JOptionPane.showMessageDialog(this, "Error updating research title: " + e.getMessage());
-            }
-        }
-    }
-    public void deleteRow(int row) {
-        try {
-            int id = Integer.parseInt(table.getValueAt(row, 0).toString());
-            int confirm = JOptionPane.showConfirmDialog(this, "Are you sure you want to delete this research title?", "Confirm Deletion", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-            if (confirm == JOptionPane.YES_OPTION) {
-                try (Connection mysqlCon = ACLCapp.DBConnection.getMySQLConnection();
-                    Connection sqliteCon = ACLCapp.DBConnection.getSQLiteConnection()) {
+            JComboBox<String> softwareBox = new JComboBox<>(new String[]{"✔", "✘"});
+            softwareBox.setSelectedItem(currentSoftware);
 
-                    String sql = "DELETE FROM ACLC_research_titles WHERE ID=?";
-                    PreparedStatement mysqlPs = mysqlCon.prepareStatement(sql);
-                    mysqlPs.setInt(1, id);
-                    mysqlPs.executeUpdate();
-                    mysqlPs.close();
+            JComboBox<String> webpageBox = new JComboBox<>(new String[]{"✔", "✘"});
+            webpageBox.setSelectedItem(currentWebpage);
 
-                    PreparedStatement sqlitePs = sqliteCon.prepareStatement(sql);
-                    sqlitePs.setInt(1, id);
-                    sqlitePs.executeUpdate();
-                    sqlitePs.close();
+            Object[] message = {
+                "Research Title:", titleField,
+                "SY-YR:", syyrField,
+                "Status:", statusBox,
+                "Approved by:", approvedbyField,
+                "Applied:", appliedBox,
+                "Strand:", strandBox,
+                "Software:", softwareBox,
+                "Webpage:", webpageBox
+            };
 
-                    JOptionPane.showMessageDialog(this, "Research Title deleted successfully!");
+            ImageIcon amaIcon = new ImageIcon(getClass().getResource("/AMA.png"));
+            int option = JOptionPane.showConfirmDialog(
+                this, message, "Edit Research Title",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE, amaIcon
+            );
+
+            if (option == JOptionPane.OK_OPTION) {
+                String inputTitle = titleField.getText().trim();
+                java.util.List<TitleMatch> topMatches = getTopSimilarTitles(inputTitle);
+                if (!topMatches.isEmpty() && topMatches.get(0).score > 0.80) {
+                    int answer = JOptionPane.showConfirmDialog(this,
+                        "⚠️ This title is " + (int)(topMatches.get(0).score * 100) + "% similar to:\n\""
+                        + topMatches.get(0).title + "\"\n\nDo you still want to save?",
+                        "High Similarity Detected",
+                        JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                    if (answer != JOptionPane.YES_OPTION) return;
+                }
+                String title = titleField.getText().trim();
+                String syyr = syyrField.getText().trim();
+                String approvedby = approvedbyField.getText().trim();
+
+                if (title.isEmpty()) {
+                    JOptionPane.showMessageDialog(this, "Research Title cannot be empty!");
+                    return;
+                }
+                if (!looksLikeAResearchTitle(title)) {
+                    return;
+                }
+                if (!syyr.matches("\\d{4}-\\d{4}")) {
+                    JOptionPane.showMessageDialog(this, "SY-YR must be in format YYYY-YYYY");
+                    return;
+                }
+                if (!confirmIfSimilarTitle(title, id)) {
+                    return;
+                }
+                String[] years = syyr.split("-");
+                int start = Integer.parseInt(years[0]);
+                int end = Integer.parseInt(years[1]);
+                if (end != start + 1) {
+                    JOptionPane.showMessageDialog(this, "SY-YR must be consecutive (e.g., 2024-2025)");
+                    return;
+                }
+
+            // Update the database
+                String updateSql = "UPDATE ACLC_research_titles SET `Research Title`=?, `SY-YR`=?, Status=?, `Approved by`=?, Applied=?, Strand=?, Software=?, Webpage=? WHERE ID=?";
+                try (PreparedStatement updatePs = con.prepareStatement(updateSql)) {
+                    updatePs.setString(1, title);
+                    updatePs.setString(2, syyr);
+                    updatePs.setString(3, (String) statusBox.getSelectedItem());
+                    updatePs.setString(4, approvedby);
+                    updatePs.setString(5, (String) appliedBox.getSelectedItem());
+                    updatePs.setString(6, (String) strandBox.getSelectedItem());
+                    updatePs.setString(7, (String) softwareBox.getSelectedItem());
+                    updatePs.setString(8, (String) webpageBox.getSelectedItem());
+                    updatePs.setInt(9, id);
+                    updatePs.executeUpdate();
+                    JOptionPane.showMessageDialog(this, "Research Title updated successfully!");
                     loadResearchTitles("");
                 }
             }
-        } catch (Exception e) {
+        } catch (SQLException e) {
             e.printStackTrace();
-            JOptionPane.showMessageDialog(this, "Error deleting research title: " + e.getMessage());
+            JOptionPane.showMessageDialog(this, "Error editing record: " + e.getMessage());
         }
+    }
+    public void deleteRow(int id) {
+        if (id <= 0) {
+            JOptionPane.showMessageDialog(this, "Invalid record ID.");
+            return;
+        }
+
+        int confirm = JOptionPane.showConfirmDialog(this,
+            "Move this research title to Storage?",
+            "Confirm", JOptionPane.YES_NO_OPTION);
+
+        if (confirm == JOptionPane.YES_OPTION) {
+            String sql = "UPDATE ACLC_research_titles SET record_state = 'DELETED' WHERE ID = ?";
+
+            try (Connection con = getBestConnection();
+                 PreparedStatement ps = con.prepareStatement(sql)) {
+
+                ps.setInt(1, id);
+                ps.executeUpdate();
+
+                JOptionPane.showMessageDialog(this, "Moved to Storage!");
+                loadResearchTitles("");
+
+                // ✅ Refresh StorageFrame if it's open
+                for (Window w : Window.getWindows()) {
+                    if (w instanceof StorageFrame) {
+                        ((StorageFrame) w).loadStorage();
+                    }
+                }
+
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    class TitleMatch {
+        String title;
+        double score;
+        TitleMatch(String t, double s) { title = t; score = s; }
+    }
+
+    private java.util.List<TitleMatch> getTopSimilarTitles(String input) {
+        java.util.List<TitleMatch> matches = new java.util.ArrayList<>();
+        if (input == null || input.trim().length() < 5) return matches;
+
+        String sql = "SELECT `Research Title` FROM ACLC_research_titles WHERE record_state = 'ACTIVE'";
+        try (Connection con = getBestConnection();
+             PreparedStatement ps = con.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+
+            while (rs.next()) {
+                String dbTitle = rs.getString("Research Title");
+                double sim = SimilarityUtil.similarityScore(input, dbTitle);
+                if (sim >= 0.10) {
+                    matches.add(new TitleMatch(dbTitle, sim));
+                }
+            }
+        } catch (Exception e) { e.printStackTrace(); }
+
+        matches.sort((a, b) -> Double.compare(b.score, a.score));
+        return matches.stream().limit(3).collect(java.util.stream.Collectors.toList());
     }
     /**
      * @param args the command line arguments
@@ -808,6 +1030,7 @@ import com.formdev.flatlaf.FlatDarkLaf;
     private javax.swing.JButton Delete;
     private javax.swing.JButton Edit;
     private javax.swing.JButton Settings;
+    private javax.swing.JButton Storage;
     private javax.swing.JFrame jFrame1;
     private javax.swing.JPopupMenu jPopupMenu1;
     private javax.swing.JScrollPane jScrollPane1;

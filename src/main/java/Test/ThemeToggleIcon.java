@@ -5,7 +5,6 @@ import com.formdev.flatlaf.ui.FlatUIUtils;
 import com.formdev.flatlaf.util.AnimatedIcon;
 import com.formdev.flatlaf.util.ColorFunctions;
 import com.formdev.flatlaf.util.UIScale;
-
 import java.awt.AlphaComposite;
 import java.awt.Color;
 import java.awt.Component;

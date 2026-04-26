@@ -231,7 +231,8 @@ public class SimilarityUtil {
         return Math.min(1.0, score / denom);
     }
 
-    public static double calculateSimilarity(String toLowerCase, String toLowerCase0) {
-        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+    public static double calculateSimilarity(String a, String b) {
+        if (a == null || b == null) return 0.0;
+        return similarityScore(a, b);
     }
 }

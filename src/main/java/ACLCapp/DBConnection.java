@@ -8,6 +8,8 @@ import java.util.Properties;
 import java.io.InputStream;
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
+import java.sql.DatabaseMetaData;
+import java.sql.SQLException;
 
 public class DBConnection {
 
@@ -70,29 +72,24 @@ public class DBConnection {
             System.err.println("[MySQL] Access denied. Unlock first.");
             return null;
         }
-        
-        // Quick check: if no network, skip MySQL entirely
-        if (!isNetworkAvailable()) {
-            System.out.println("[MySQL] No network detected - skipping MySQL");
-            return null;
-        }
-        
+
         try {
-            if (mysqlConnection == null || mysqlConnection.isClosed()) {
-                Class.forName("com.mysql.cj.jdbc.Driver");
-                String url = "jdbc:mysql://" + props.getProperty("mysql.host") + ":" +
-                        props.getProperty("mysql.port") + "/" + props.getProperty("mysql.db") +
-                        "?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&connectTimeout=3000";
-                mysqlConnection = DriverManager.getConnection(url,
-                        props.getProperty("mysql.user"),
-                        props.getProperty("mysql.password"));
-                System.out.println("[MySQL] ✅ Connected to MySQL server.");
-            }
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            String url = "jdbc:mysql://" + props.getProperty("mysql.host") + ":" +
+                    props.getProperty("mysql.port") + "/" + props.getProperty("mysql.db") +
+                    "?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&connectTimeout=3000";
+
+            Connection conn = DriverManager.getConnection(url,
+                    props.getProperty("mysql.user"),
+                    props.getProperty("mysql.password"));
+
+            System.out.println("[MySQL] ✅ Connected successfully.");
+            return conn;
+
         } catch (Exception e) {
             System.err.println("[MySQL] ❌ Connection failed: " + e.getMessage());
-            mysqlConnection = null;
+            return null;
         }
-        return mysqlConnection;
     }
 
     public static Connection getSQLiteConnection() {
@@ -136,56 +133,52 @@ public class DBConnection {
         return sqliteConnection;
     }
     
-    private static void initializeSQLiteTable(Connection sqlite) {
-        String createTableSQL = 
-            "CREATE TABLE IF NOT EXISTS ACLC_research_titles (" +
-            "    ID INTEGER PRIMARY KEY AUTOINCREMENT," +
-            "    \"Research Title\" TEXT NOT NULL," +
-            "    \"SY-YR\" TEXT," +
-            "    \"Status\" TEXT," +
-            "    \"Applied\" TEXT," +
-            "    \"Strand\" TEXT," +
-            "    \"Software\" TEXT," +
-            "    \"Webpage\" TEXT," +
-            "    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
-            ")";
-        
-        try (Statement stmt = sqlite.createStatement()) {
-            stmt.execute(createTableSQL);
-            
-            // Check if last_updated column exists (for old databases)
+// Inside DBConnection.java -> initializeSQLiteTable()
+    private static void initializeSQLiteTable(Connection conn) {
+        try (Statement stmt = conn.createStatement()) {
+            // 1. Create table with ALL columns if it doesn't exist
+            stmt.execute("CREATE TABLE IF NOT EXISTS ACLC_research_titles (" +
+                "ID INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "`Research Title` TEXT, " +
+                "`SY-YR` TEXT, " +
+                "Status TEXT, " +
+                "`Approved by` TEXT, " +
+                "Applied TEXT, " +
+                "Strand TEXT, " +
+                "Software TEXT, " +
+                "Webpage TEXT, " +
+                "record_state TEXT DEFAULT 'ACTIVE', " +
+                "last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+
+            // 2. Check for missing columns in existing table
+            DatabaseMetaData meta = conn.getMetaData();
+            boolean hasRecordState = false;
             boolean hasLastUpdated = false;
-            try (ResultSet rs = stmt.executeQuery("PRAGMA table_info(ACLC_research_titles)")) {
+
+            try (ResultSet rs = meta.getColumns(null, null, "ACLC_research_titles", null)) {
                 while (rs.next()) {
-                    if ("last_updated".equals(rs.getString("name"))) {
-                        hasLastUpdated = true;
-                        break;
-                    }
+                    String colName = rs.getString("COLUMN_NAME");
+                    if ("record_state".equalsIgnoreCase(colName)) hasRecordState = true;
+                    if ("last_updated".equalsIgnoreCase(colName)) hasLastUpdated = true;
                 }
             }
-            
+
+            // 3. Add columns if they are missing
+            if (!hasRecordState) {
+                stmt.execute("ALTER TABLE ACLC_research_titles ADD COLUMN record_state TEXT DEFAULT 'ACTIVE'");
+                System.out.println("[SQLite] Added missing record_state column.");
+            }
             if (!hasLastUpdated) {
                 stmt.execute("ALTER TABLE ACLC_research_titles ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
                 System.out.println("[SQLite] Added missing last_updated column.");
             }
-            
-            System.out.println("[SQLite] Table structure verified.");
-        } catch (Exception e) {
-            System.err.println("[SQLite] Failed to create table: " + e.getMessage());
+
+        } catch (SQLException e) {
+            System.err.println("[SQLite] Schema verification failed: " + e.getMessage());
         }
     }
     
-    // Helper method to check if network is available
-    private static boolean isNetworkAvailable() {
-        try {
-            java.net.InetAddress addr = java.net.InetAddress.getByName("8.8.8.8");
-            return addr.isReachable(2000); // 2 second timeout
-        } catch (Exception e) {
-            return false;
-        }
-    }
-    
-    public static void closeConnections() {
+      public static void closeConnections() {
         try {
             if (mysqlConnection != null && !mysqlConnection.isClosed()) {
                 mysqlConnection.close();
