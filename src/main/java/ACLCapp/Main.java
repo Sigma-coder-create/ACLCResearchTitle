@@ -3,6 +3,7 @@ package ACLCapp;
 import Test.StudentWindowGUI;
 import javax.swing.*;
 import javax.swing.SwingUtilities;
+import Test.TimeLimit;
 
 public class Main {
     public static void main(String[] args) {
@@ -25,6 +26,7 @@ public class Main {
         // DBSync handles connections internally (SQLite first, MySQL optional)
         DBSync.insertTestDataIfEmpty();
         DBSync.syncResearchTitles();
+        TimeLimit.cleanupExpiredTitles(); 
 
         // 🚀 Initialize the self-learning similarity system after syncing
         SimilarityUtil.initializeFromDatabases();

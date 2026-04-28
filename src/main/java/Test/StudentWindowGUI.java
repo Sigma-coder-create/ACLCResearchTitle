@@ -125,7 +125,38 @@ import java.sql.Statement;
             return false;
         }
     }
+    private void performHybridSimilarityCheck(String inputTitle) {
+        if (inputTitle.trim().isEmpty()) return;
 
+        // 1. LOCAL CHECK: Use your SimilarityUtil to check the ACLC Database
+        // We assume 'localDatabaseTitles' is a list of titles you've fetched
+        double highestLocalScore = 0.0;
+
+        /* for (String savedTitle : localDatabaseTitles) {
+            double score = ACLCapp.SimilarityUtil.calculateSimilarity(inputTitle, savedTitle);
+            if (score > highestLocalScore) highestLocalScore = score;
+        }
+        */
+
+        // 2. WEB CHECK: If local similarity is low, but Web Search is ON, check globally
+        if (ACLCapp.AppSettings.WEB_SEARCH_ENABLED && highestLocalScore < 0.90) {
+            try {
+                // Encode for a Google Scholar "Exact Phrase" search
+                String encoded = java.net.URLEncoder.encode("\"" + inputTitle + "\"", "UTF-8");
+                String url = "https://scholar.google.com/scholar?q=" + encoded;
+
+                if (java.awt.Desktop.isDesktopSupported()) {
+                    java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
+                    System.out.println("No local match found. Launching Web Similarity Check...");
+                }
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        } else if (highestLocalScore >= 0.90) {
+            System.out.println("Local duplicate detected. Skipping Web Search.");
+            // Show a popup or warning to the user here
+        }
+    }
     private boolean isValidResearchTitle(String title) {
         if (title == null) return false;
 
@@ -137,7 +168,7 @@ import java.sql.Statement;
             return false;
         }
 
-        if (!title.matches("[A-Za-z0-9 ,:()\\-]+")) {
+        if (!title.matches("[A-Za-z0-9 ,:!@#$%^&*_+{};'/?().\\\\-]+")) {
             JOptionPane.showMessageDialog(this,
             "Research Title contains invalid characters.");
             return false;
@@ -274,37 +305,38 @@ import java.sql.Statement;
             JOptionPane.showMessageDialog(this, "Error loading data: " + e.getMessage());
         }
     }
-private void loadData() {
-    DefaultTableModel model = (DefaultTableModel) table.getModel();
-    model.setRowCount(0);
 
-    String sql = "SELECT ID, `Research Title`, `SY-YR`, Status, `Approved by`, Applied, Strand, Software, Webpage " +
-                 "FROM ACLC_research_titles WHERE record_state = 'ACTIVE'";
+    private void loadData() {
+        DefaultTableModel model = (DefaultTableModel) table.getModel();
+        model.setRowCount(0);
 
-    try (Connection con = DBConnection.getConnection();
-         PreparedStatement ps = con.prepareStatement(sql);
-         ResultSet rs = ps.executeQuery()) {
+        String sql = "SELECT ID, `Research Title`, `SY-YR`, Status, `Approved by`, Applied, Strand, Software, Webpage " +
+                     "FROM ACLC_research_titles WHERE record_state = 'ACTIVE'";
 
-        while (rs.next()) {
-            model.addRow(new Object[]{
-                rs.getInt("ID"),
-                rs.getString("Research Title"),
-                rs.getString("SY_YR"),
-                rs.getString("Status"),
-                rs.getString("Approved by"),
-                rs.getString("Applied"),
-                rs.getString("Strand"),
-                rs.getString("Software"),
-                rs.getString("Webpage")
-            });
+        try (Connection con = DBConnection.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+
+            while (rs.next()) {
+                model.addRow(new Object[]{
+                    rs.getInt("ID"),
+                    rs.getString("Research Title"),
+                    rs.getString("SY_YR"),
+                    rs.getString("Status"),
+                    rs.getString("Approved by"),
+                    rs.getString("Applied"),
+                    rs.getString("Strand"),
+                    rs.getString("Software"),
+                    rs.getString("Webpage")
+                });
+            }
+
+            System.out.println("[GUI] Loaded from: " + con.getMetaData().getURL());
+
+        } catch (SQLException e) {
+            e.printStackTrace();
         }
-
-        System.out.println("[GUI] Loaded from: " + con.getMetaData().getURL());
-
-    } catch (SQLException e) {
-        e.printStackTrace();
     }
-}
     private Connection getBestConnection() throws SQLException {
         Connection con = DBConnection.getMySQLConnection();
         if (con != null) {
@@ -583,6 +615,7 @@ private void loadData() {
     }//GEN-LAST:event_EditActionPerformed
  
     private void StorageActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_StorageActionPerformed
+
         new StorageFrame().setVisible(true);
     }//GEN-LAST:event_StorageActionPerformed
 
@@ -628,8 +661,9 @@ private void loadData() {
                 }
                 suggestionPanel.removeAll();
                 java.util.List<TitleMatch> matches = getTopSimilarTitles(titleField.getText());
+                
                 for (TitleMatch m : matches) {
-                    SuggestionCard card = new SuggestionCard(m.title, m.score, titleField);
+                    SuggestionCard card = new SuggestionCard(m.title, m.score, "Database", titleField);
                     suggestionPanel.add(card);
                 }
                 suggestionPanel.revalidate();
@@ -952,7 +986,9 @@ private void loadData() {
 
                 ps.setInt(1, id);
                 ps.executeUpdate();
-
+                //StorageFrame.getInstance().setVisible(true);//
+                StorageFrame.getInstance().loadStorage();
+                
                 JOptionPane.showMessageDialog(this, "Moved to Storage!");
                 loadResearchTitles("");
 

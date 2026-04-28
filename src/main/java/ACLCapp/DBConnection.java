@@ -36,6 +36,21 @@ public class DBConnection {
             throw new RuntimeException("Failed to load encrypted configuration: " + e.getMessage(), e);
         }
     }
+    public static boolean isInternetAvailable() {
+        try {
+            // Try to connect to Google's DNS or a reliable site
+            java.net.URL url = new java.net.URL("https://www.google.com");
+            java.net.URLConnection connection = url.openConnection();
+            connection.setConnectTimeout(2000); // 2 second timeout
+            connection.connect();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+    public static String getProperty(String key) {
+        return props.getProperty(key);
+    }
     
     public static Connection getConnection() {
         // Try SQLite FIRST (always works offline)

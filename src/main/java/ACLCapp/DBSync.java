@@ -2,7 +2,8 @@ package ACLCapp;
 
 import java.sql.*;
 import java.util.*;
-
+import org.json.JSONArray;
+import org.json.JSONObject;
 public class DBSync {
 
     public static void syncResearchTitles() {
@@ -34,7 +35,50 @@ public class DBSync {
             e.printStackTrace();
         }
     }
-    
+    public static void exportForWeb() {
+        Connection con = null;
+        try {
+            con = DBConnection.getMySQLConnection();
+            if (con == null) con = DBConnection.getSQLiteConnection();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return;
+        }
+
+        String sql = "SELECT `Research Title`, `Status`, `Approved by` " +
+                     "FROM ACLC_research_titles WHERE record_state = 'ACTIVE'";
+
+        JSONArray arr = new JSONArray();
+        try (PreparedStatement ps = con.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+
+            while (rs.next()) {
+                JSONObject obj = new JSONObject();
+                obj.put("title", rs.getString("Research Title"));
+                obj.put("status", rs.getString("Status"));
+                obj.put("approved_by", rs.getString("Approved by"));
+                arr.put(obj);
+            }
+
+            // Determine portable app folder (same as SQLite DB)
+            String appFolder = System.getenv("LOCALAPPDATA");
+            if (appFolder == null) {
+                appFolder = System.getProperty("user.home");
+            }
+            appFolder += java.io.File.separator + "ACLC Research Title";
+            new java.io.File(appFolder).mkdirs();
+
+            String filePath = appFolder + java.io.File.separator + "research.json";
+            try (java.io.FileWriter writer = new java.io.FileWriter(filePath)) {
+                writer.write(arr.toString(2));
+            }
+            System.out.println("✅ research.json exported to: " + filePath);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     public static void insertTestDataIfEmpty() {
         System.out.println("[DBSync] Test data check - using actual database sync.");
     }

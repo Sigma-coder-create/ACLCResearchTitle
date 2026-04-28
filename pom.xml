@@ -60,6 +60,12 @@
             <artifactId>org-jdesktop-animation-timing</artifactId>
             <version>1.0-201002281504</version>
         </dependency>
+        <dependency>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>20250517</version>
+            <scope>compile</scope>
+        </dependency>
 
     </dependencies>
     

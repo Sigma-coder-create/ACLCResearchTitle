@@ -3,7 +3,9 @@ package ACLCapp;
 import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
-
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import Test.TimeLimit;
 public class SimilarityUtil {
 
     private static final Set<String> STOPWORDS = new HashSet<>(Arrays.asList(
@@ -90,7 +92,48 @@ public class SimilarityUtil {
         initialized = true;
         System.out.println("[SimilarityUtil] Initialized vocabulary size=" + vocabulary.size() + " documents=" + docCount);
     }
+    public static List<TimeLimit> getDetailedSimilarTitles(String inputTitle) {
+        List<TimeLimit> results = new ArrayList<>();
+        String sql = "SELECT `Research Title`, `SY-YR` FROM ACLC_research_titles";
 
+        try (Connection con = DBConnection.getSQLiteConnection(); // Or getBestConnection()
+             PreparedStatement ps = con.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+
+            while (rs.next()) {
+                String title = rs.getString("Research Title");
+                String dateStr = rs.getString("SY-YR");
+                double score = calculateSimilarity(inputTitle, title);
+
+                if (score > 0.4) { // Only suggest relevant matches
+                    results.add(new TimeLimit(title, score, "Database", dateStr));
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return results;
+    }
+    public static List<String> getSimilarTitlesFromWeb(String inputTitle) {
+        List<String> webTitles = new ArrayList<>();
+        if (!AppSettings.WEB_SEARCH_ENABLED || !DBConnection.isInternetAvailable()) {
+            return webTitles;
+        }
+
+        try {
+        String encoded = java.net.URLEncoder.encode(inputTitle, "UTF-8");
+            java.net.URL url = new java.net.URL("https://scholar.google.com/scholar?q=" + encoded);
+
+            if (java.awt.Desktop.isDesktopSupported()) {
+                // Convert URL to URI here
+                java.awt.Desktop.getDesktop().browse(url.toURI()); 
+            }
+
+        } catch (Exception e) {
+            System.err.println("Web Check Failed: " + e.getMessage());
+        }
+        return webTitles;
+    }
     private static void collectTitlesFromConn(Connection conn, List<String> out) {
         try (PreparedStatement ps = conn.prepareStatement("SELECT `Research Title` FROM ACLC_research_titles");
              ResultSet rs = ps.executeQuery()) {
